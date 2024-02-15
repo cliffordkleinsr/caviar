@@ -15,6 +15,8 @@ class ImageDataset(Dataset):
             self,
             dataframe:DataFrame,
             img_dir:str,
+            image:str = None,
+            label:str=None,
             transforms = None,
             suffix :str = 'jpg'
     ) -> Tensor:
@@ -23,8 +25,8 @@ class ImageDataset(Dataset):
         self.data = dataframe
         self.transforms = transforms
         self.suffix = suffix
-        self.image = self.data.iloc[:, 0]
-        self.label = self.data.iloc[:, 7]
+        self.image = self.data[image].astype(str)
+        self.label = self.data[label] if label is not None else None
         self.img_dir = img_dir
    
     def __len__(self):
@@ -35,10 +37,11 @@ class ImageDataset(Dataset):
         single_image = join(self.img_dir, self.image[index])
         img = Image.open(f'{single_image}.{self.suffix}')
         img = self.transforms(img) if self.transforms else img# transform
-
-        label = self.label[index]
-
-        return img if is_tensor(img) else ToTensor()(img), label
+        if self.label is not None:
+            label = self.label[index]
+            return img if is_tensor(img) else ToTensor()(img), label
+        else:
+            return img if is_tensor(img) else ToTensor()(img)#test data
 
 class TabularDataset(Dataset):
     def __init__(
@@ -53,7 +56,7 @@ class TabularDataset(Dataset):
 
         self.data = data
         self.target = target
-        if target:
+        if target is not None:
             self.y = data[target].values
 
         self.processing_strategy = processing_strategy
@@ -61,13 +64,19 @@ class TabularDataset(Dataset):
         self.continuous_cols = [] if continuous_cols is None else continuous_cols
         if processing_strategy: 
             self._preprocess_data()
-        if len(self.continuous_cols)  != 0:
+        # if len(self.continuous_cols)  != 0:
+            
+        if len(self.categorical_cols) != 0:
+            self.codes_stack = np.stack([c.cat.codes.values for n, c in self.data[self.categorical_cols].items()], 1).astype(np.int64) + 1
             self.classes = OrderedDict({n:np.concatenate([['#na#'],c.cat.categories.values])
                                       for n,c in self.data[self.categorical_cols].items()})
-        else: self.classes = None
+        else:
+            self.classes = None
+            self.codes_stack =None
 
-        self.codes_stack = np.stack([c.cat.codes.values for n, c in self.data[self.categorical_cols].items()], 1).astype(np.int64) + 1
-        self.conts_stack = np.stack([c.astype('float32').values for n, c in self.data[self.continuous_cols].items()], 1)
+        if len(self.continuous_cols) != 0:
+            self.conts_stack = np.stack([c.astype('float32').values for n, c in self.data[self.continuous_cols].items()], 1)
+        else: self.conts_stack = None
         
     def _preprocess_data(self):
        self.data = Preprocess(self.data, self.categorical_cols, self.continuous_cols, self.processing_strategy)
@@ -85,11 +94,16 @@ class TabularDataset(Dataset):
         # codes = np.stack([c.cat.codes.values for n,c in self.data[self.categorical_cols].items()], 1).astype(np.int64) + 1
         # conts = np.stack([c.astype('float32').values for n,c in self.data[self.continuous_cols].items()], 1)
 
-        cat = tensor(self.codes_stack[index])
-        cont = tensor(self.conts_stack[index])
+        if len(self.categorical_cols) != 0: cat = tensor(self.codes_stack[index])
+        else: cat = tensor([])
+        if len(self.continuous_cols) != 0: cont = tensor(self.conts_stack[index])
+        else: cont = tensor([])
         line = [cat, cont]
 
-        return line, self.y[index]
+        if self.target is not None:
+            return line, self.y[index]
+        else:
+            return line
         """No Dict Return needed"""
             #  return {
             #      "target": self.y[index],
@@ -113,7 +127,10 @@ class ImageTabDataset(Dataset):
         image_data = self.image_dataset[index]
         tabular_data = self.tabular_dataset[index]
 
-        data = [image_data[0], tabular_data[0]], image_data[1]
+        if isinstance(image_data[1], np.int64):
+            data = [image_data[0], tabular_data[0]], image_data[1]
+        else:
+            data = [image_data, tabular_data]
         
         return data
 
